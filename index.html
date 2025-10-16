@@ -50,7 +50,7 @@
       document.getElementById("result").innerText = "✅ Modelo carregado! Pronto.";
     }
 
-   async function extractMFCCs(audioBuffer) {
+  async function extractMFCCs(audioBuffer) {
   const offlineCtx = new OfflineAudioContext(1, audioBuffer.length, audioBuffer.sampleRate);
   const source = offlineCtx.createBufferSource();
   source.buffer = audioBuffer;
@@ -63,7 +63,7 @@
   const frameSize = 1024;
   const hopSize = 512;
   const nMfcc = 13;
-  const maxFrames = 100; // até 100 janelas de análise
+  const fixedFrames = 10; // ⚠️ igual ao modelo treinado
 
   let mfccs = [];
 
@@ -75,18 +75,22 @@
       numberOfMFCCCoefficients: nMfcc
     });
     if (features && features.mfcc) mfccs.push(features.mfcc);
-    if (mfccs.length >= maxFrames) break;
   }
 
-  // Padroniza o tamanho (preenche com zeros se for menor que o máximo)
-  while (mfccs.length < maxFrames) {
-    mfccs.push(new Array(nMfcc).fill(0));
+  // 🔹 Ajusta exatamente para 10 frames
+  if (mfccs.length > fixedFrames) {
+    mfccs = mfccs.slice(0, fixedFrames); // corta o excesso
+  } else {
+    while (mfccs.length < fixedFrames) {
+      mfccs.push(new Array(nMfcc).fill(0)); // completa com zeros
+    }
   }
 
-  const mfccTensor = tf.tensor(mfccs, [maxFrames, nMfcc]);
-  const inputTensor = mfccTensor.expandDims(0).expandDims(-1); // [1, time, mfcc, 1]
+  const mfccTensor = tf.tensor(mfccs, [fixedFrames, nMfcc]);
+  const inputTensor = mfccTensor.expandDims(0).expandDims(-1); // [1,10,13,1]
   return inputTensor;
 }
+
 
 
    async function predictChord(file) {
