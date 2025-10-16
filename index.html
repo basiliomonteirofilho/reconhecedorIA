@@ -67,46 +67,48 @@
     // =====================================================
     // 2️⃣ Extrai MFCCs com ajuste automático de tamanho
     // =====================================================
-    async function extractMFCCs(audioBuffer) {
-      const offlineCtx = new OfflineAudioContext(1, audioBuffer.length, audioBuffer.sampleRate);
-      const source = offlineCtx.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(offlineCtx.destination);
-      source.start(0);
+   async function extractMFCCs(audioBuffer) {
+  const offlineCtx = new OfflineAudioContext(1, audioBuffer.length, audioBuffer.sampleRate);
+  const source = offlineCtx.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(offlineCtx.destination);
+  source.start(0);
 
-      const rendered = await offlineCtx.startRendering();
-      const channelData = rendered.getChannelData(0);
+  const rendered = await offlineCtx.startRendering();
+  const channelData = rendered.getChannelData(0);
 
-      const frameSize = 1024;
-      const hopSize = 512;
-      const nMfcc = inputShape.mfcc;
-      const fixedFrames = inputShape.time;
+  const frameSize = 1024;
+  const hopSize = 512;
+  const nMfcc = inputShape.mfcc;
+  const fixedFrames = inputShape.time || 10; // se não detectar, usa 10
 
-      let mfccs = [];
+  let mfccs = [];
 
-      for (let i = 0; i < channelData.length - frameSize; i += hopSize) {
-        const frame = channelData.slice(i, i + frameSize);
-        const features = Meyda.extract('mfcc', frame, {
-          sampleRate: audioBuffer.sampleRate,
-          bufferSize: frameSize,
-          numberOfMFCCCoefficients: nMfcc
-        });
-        if (features && features.mfcc) mfccs.push(features.mfcc);
-      }
+  for (let i = 0; i < channelData.length - frameSize; i += hopSize) {
+    const frame = channelData.slice(i, i + frameSize);
+    const features = Meyda.extract('mfcc', frame, {
+      sampleRate: audioBuffer.sampleRate,
+      bufferSize: frameSize,
+      numberOfMFCCCoefficients: nMfcc
+    });
+    if (features && features.mfcc) mfccs.push(features.mfcc);
+  }
 
-      // 🔹 Ajusta exatamente para o tamanho esperado pelo modelo
-      if (mfccs.length > fixedFrames) {
-        mfccs = mfccs.slice(0, fixedFrames);
-      } else {
-        while (mfccs.length < fixedFrames) {
-          mfccs.push(new Array(nMfcc).fill(0));
-        }
-      }
-
-      const tensor = tf.tensor(mfccs, [fixedFrames, nMfcc]).expandDims(0).expandDims(-1);
-      console.log("🎛️ Input tensor shape:", tensor.shape);
-      return tensor;
+  // 🔹 Ajusta exatamente para o tamanho esperado pelo modelo
+  if (mfccs.length > fixedFrames) {
+    mfccs = mfccs.slice(0, fixedFrames);
+  } else if (mfccs.length < fixedFrames) {
+    while (mfccs.length < fixedFrames) {
+      mfccs.push(new Array(nMfcc).fill(0));
     }
+  }
+
+  const mfccTensor = tf.tensor(mfccs, [fixedFrames, nMfcc]);
+  const inputTensor = mfccTensor.expandDims(0).expandDims(-1); // [1,10,13,1]
+  console.log("🎛️ Input tensor shape:", inputTensor.shape);
+  return inputTensor;
+}
+
 
     // =====================================================
     // 3️⃣ Prediz o acorde do arquivo
