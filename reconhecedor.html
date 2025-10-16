@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Reconhecedor de Acordes 🎸</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.19.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/meyda/dist/web/meyda.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #101820;
+      color: #f5f5f5;
+      text-align: center;
+      padding: 40px;
+    }
+    h1 { color: #00e676; }
+    input[type="file"] {
+      margin: 20px;
+      padding: 10px;
+      border: 2px dashed #00e676;
+      border-radius: 8px;
+      background: #1c1c1c;
+      color: #fff;
+    }
+    #result {
+      margin-top: 30px;
+      font-size: 2em;
+      color: #ffea00;
+    }
+  </style>
+</head>
+<body>
+  <h1>🎧 Reconhecedor de Acordes</h1>
+  <p>Selecione um arquivo de áudio (.wav ou .mp3):</p>
+  <input type="file" id="audioFile" accept="audio/*" />
+  <div id="result">Carregue um arquivo...</div>
+
+  <script>
+    let model;
+    const CHORD_MAP_URL = "chord_map.json";
+    const MODEL_URL = "web_model/model.json";
+    let chordMap = {};
+
+    async function loadModel() {
+      document.getElementById("result").innerText = "Carregando modelo...";
+      model = await tf.loadLayersModel(MODEL_URL);
+      const res = await fetch(CHORD_MAP_URL);
+      chordMap = await res.json();
+      document.getElementById("result").innerText = "✅ Modelo carregado! Pronto.";
+    }
+
+    async function extractMFCCs(audioBuffer) {
+      const offlineCtx = new OfflineAudioContext(1, audioBuffer.length, audioBuffer.sampleRate);
+      const source = offlineCtx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(offlineCtx.destination);
+      source.start(0);
+
+      const rendered = await offlineCtx.startRendering();
+      const channelData = rendered.getChannelData(0);
+
+      // Cria janela de análise
+      const frameSize = 2048;
+      const hopSize = 512;
+      let mfccs = [];
+
+      for (let i = 0; i < channelData.length - frameSize; i += hopSize) {
+        const frame = channelData.slice(i, i + frameSize);
+        const features = Meyda.extract("mfcc", frame, { sampleRate: audioBuffer.sampleRate });
+        if (features && features.mfcc) mfccs.push(features.mfcc);
+      }
+
+      // Normaliza e padroniza formato [tempo, coeficientes, canal]
+      const maxLen = 10;
+      const nMfcc = 13;
+      const mfccArray = new Array(maxLen).fill(0).map(() => new Array(nMfcc).fill(0));
+      for (let i = 0; i < Math.min(maxLen, mfccs.length); i++) {
+        for (let j = 0; j < nMfcc; j++) {
+          mfccArray[i][j] = mfccs[i][j] || 0;
+        }
+      }
+
+      return tf.tensor4d([mfccArray], [1, maxLen, nMfcc, 1]);
+    }
+
+    async function predictChord(file) {
+      document.getElementById("result").innerText = "🎵 Analisando áudio...";
+      const audioCtx = new AudioContext();
+      const arrayBuffer = await file.arrayBuffer();
+      const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+      const inputTensor = await extractMFCCs(audioBuffer);
+
+      const prediction = model.predict(inputTensor);
+      const predictedIndex = prediction.argMax(-1).dataSync()[0];
+      const chordName = chordMap[predictedIndex] || "Desconhecido";
+
+      document.getElementById("result").innerText = `🎸 Acorde: ${chordName}`;
+    }
+
+    document.getElementById("audioFile").addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (file && model) predictChord(file);
+    });
+
+    loadModel();
+  </script>
+</body>
+</html>
