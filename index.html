@@ -50,53 +50,60 @@
       document.getElementById("result").innerText = "✅ Modelo carregado! Pronto.";
     }
 
-    async function extractMFCCs(audioBuffer) {
-      const offlineCtx = new OfflineAudioContext(1, audioBuffer.length, audioBuffer.sampleRate);
-      const source = offlineCtx.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(offlineCtx.destination);
-      source.start(0);
+   async function extractMFCCs(audioBuffer) {
+  const offlineCtx = new OfflineAudioContext(1, audioBuffer.length, audioBuffer.sampleRate);
+  const source = offlineCtx.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(offlineCtx.destination);
+  source.start(0);
 
-      const rendered = await offlineCtx.startRendering();
-      const channelData = rendered.getChannelData(0);
+  const rendered = await offlineCtx.startRendering();
+  const channelData = rendered.getChannelData(0);
 
-      // Cria janela de análise
-      const frameSize = 2048;
-      const hopSize = 512;
-      let mfccs = [];
+  const frameSize = 1024;
+  const hopSize = 512;
+  const nMfcc = 13;
+  const maxFrames = 100; // até 100 janelas de análise
 
-      for (let i = 0; i < channelData.length - frameSize; i += hopSize) {
-        const frame = channelData.slice(i, i + frameSize);
-        const features = Meyda.extract("mfcc", frame, { sampleRate: audioBuffer.sampleRate });
-        if (features && features.mfcc) mfccs.push(features.mfcc);
-      }
+  let mfccs = [];
 
-      // Normaliza e padroniza formato [tempo, coeficientes, canal]
-      const maxLen = 10;
-      const nMfcc = 13;
-      const mfccArray = new Array(maxLen).fill(0).map(() => new Array(nMfcc).fill(0));
-      for (let i = 0; i < Math.min(maxLen, mfccs.length); i++) {
-        for (let j = 0; j < nMfcc; j++) {
-          mfccArray[i][j] = mfccs[i][j] || 0;
-        }
-      }
+  for (let i = 0; i < channelData.length - frameSize; i += hopSize) {
+    const frame = channelData.slice(i, i + frameSize);
+    const features = Meyda.extract('mfcc', frame, {
+      sampleRate: audioBuffer.sampleRate,
+      bufferSize: frameSize,
+      numberOfMFCCCoefficients: nMfcc
+    });
+    if (features && features.mfcc) mfccs.push(features.mfcc);
+    if (mfccs.length >= maxFrames) break;
+  }
 
-      return tf.tensor4d([mfccArray], [1, maxLen, nMfcc, 1]);
-    }
+  // Padroniza o tamanho (preenche com zeros se for menor que o máximo)
+  while (mfccs.length < maxFrames) {
+    mfccs.push(new Array(nMfcc).fill(0));
+  }
 
-    async function predictChord(file) {
-      document.getElementById("result").innerText = "🎵 Analisando áudio...";
-      const audioCtx = new AudioContext();
-      const arrayBuffer = await file.arrayBuffer();
-      const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-      const inputTensor = await extractMFCCs(audioBuffer);
+  const mfccTensor = tf.tensor(mfccs, [maxFrames, nMfcc]);
+  const inputTensor = mfccTensor.expandDims(0).expandDims(-1); // [1, time, mfcc, 1]
+  return inputTensor;
+}
 
-      const prediction = model.predict(inputTensor);
-      const predictedIndex = prediction.argMax(-1).dataSync()[0];
-      const chordName = chordMap[predictedIndex] || "Desconhecido";
 
-      document.getElementById("result").innerText = `🎸 Acorde: ${chordName}`;
-    }
+   async function predictChord(file) {
+  document.getElementById("result").innerText = "🎵 Analisando áudio...";
+  const audioCtx = new AudioContext();
+  const arrayBuffer = await file.arrayBuffer();
+  const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+  const inputTensor = await extractMFCCs(audioBuffer);
+
+  console.log("Input shape:", inputTensor.shape);
+
+  const prediction = model.predict(inputTensor);
+  const predictedIndex = prediction.argMax(-1).dataSync()[0];
+  const chordName = chordMap[predictedIndex] || "Desconhecido";
+
+  document.getElementById("result").innerText = `🎸 Acorde: ${chordName}`;
+}
 
     document.getElementById("audioFile").addEventListener("change", (e) => {
       const file = e.target.files[0];
