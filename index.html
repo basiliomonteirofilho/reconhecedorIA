@@ -38,77 +38,96 @@
 
   <script>
     let model;
-    const CHORD_MAP_URL = "chord_map.json";
-    const MODEL_URL = "web_model/model.json";
     let chordMap = {};
+    let inputShape = { time: 10, mfcc: 13 }; // valor padrão, substituído automaticamente
 
+    const MODEL_URL = "web_model/model.json";
+    const CHORD_MAP_URL = "chord_map.json";
+
+    // =====================================================
+    // 1️⃣ Carrega modelo e define inputShape automático
+    // =====================================================
     async function loadModel() {
       document.getElementById("result").innerText = "Carregando modelo...";
       model = await tf.loadLayersModel(MODEL_URL);
+
+      // 🔍 Detecta forma de entrada automaticamente
+      const modelData = await fetch(MODEL_URL).then(res => res.json());
+      const shape = modelData.modelTopology.model_config.config.layers[0].config.batch_input_shape;
+      inputShape = { time: shape[1], mfcc: shape[2] };
+      console.log("🔧 Detected input shape:", inputShape);
+
+      // Carrega mapeamento de acordes
       const res = await fetch(CHORD_MAP_URL);
       chordMap = await res.json();
+
       document.getElementById("result").innerText = "✅ Modelo carregado! Pronto.";
     }
 
-  async function extractMFCCs(audioBuffer) {
-  const offlineCtx = new OfflineAudioContext(1, audioBuffer.length, audioBuffer.sampleRate);
-  const source = offlineCtx.createBufferSource();
-  source.buffer = audioBuffer;
-  source.connect(offlineCtx.destination);
-  source.start(0);
+    // =====================================================
+    // 2️⃣ Extrai MFCCs com ajuste automático de tamanho
+    // =====================================================
+    async function extractMFCCs(audioBuffer) {
+      const offlineCtx = new OfflineAudioContext(1, audioBuffer.length, audioBuffer.sampleRate);
+      const source = offlineCtx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(offlineCtx.destination);
+      source.start(0);
 
-  const rendered = await offlineCtx.startRendering();
-  const channelData = rendered.getChannelData(0);
+      const rendered = await offlineCtx.startRendering();
+      const channelData = rendered.getChannelData(0);
 
-  const frameSize = 1024;
-  const hopSize = 512;
-  const nMfcc = 13;
-  const fixedFrames = 10; // ⚠️ igual ao modelo treinado
+      const frameSize = 1024;
+      const hopSize = 512;
+      const nMfcc = inputShape.mfcc;
+      const fixedFrames = inputShape.time;
 
-  let mfccs = [];
+      let mfccs = [];
 
-  for (let i = 0; i < channelData.length - frameSize; i += hopSize) {
-    const frame = channelData.slice(i, i + frameSize);
-    const features = Meyda.extract('mfcc', frame, {
-      sampleRate: audioBuffer.sampleRate,
-      bufferSize: frameSize,
-      numberOfMFCCCoefficients: nMfcc
-    });
-    if (features && features.mfcc) mfccs.push(features.mfcc);
-  }
+      for (let i = 0; i < channelData.length - frameSize; i += hopSize) {
+        const frame = channelData.slice(i, i + frameSize);
+        const features = Meyda.extract('mfcc', frame, {
+          sampleRate: audioBuffer.sampleRate,
+          bufferSize: frameSize,
+          numberOfMFCCCoefficients: nMfcc
+        });
+        if (features && features.mfcc) mfccs.push(features.mfcc);
+      }
 
-  // 🔹 Ajusta exatamente para 10 frames
-  if (mfccs.length > fixedFrames) {
-    mfccs = mfccs.slice(0, fixedFrames); // corta o excesso
-  } else {
-    while (mfccs.length < fixedFrames) {
-      mfccs.push(new Array(nMfcc).fill(0)); // completa com zeros
+      // 🔹 Ajusta exatamente para o tamanho esperado pelo modelo
+      if (mfccs.length > fixedFrames) {
+        mfccs = mfccs.slice(0, fixedFrames);
+      } else {
+        while (mfccs.length < fixedFrames) {
+          mfccs.push(new Array(nMfcc).fill(0));
+        }
+      }
+
+      const tensor = tf.tensor(mfccs, [fixedFrames, nMfcc]).expandDims(0).expandDims(-1);
+      console.log("🎛️ Input tensor shape:", tensor.shape);
+      return tensor;
     }
-  }
 
-  const mfccTensor = tf.tensor(mfccs, [fixedFrames, nMfcc]);
-  const inputTensor = mfccTensor.expandDims(0).expandDims(-1); // [1,10,13,1]
-  return inputTensor;
-}
+    // =====================================================
+    // 3️⃣ Prediz o acorde do arquivo
+    // =====================================================
+    async function predictChord(file) {
+      document.getElementById("result").innerText = "🎵 Analisando áudio...";
+      const audioCtx = new AudioContext();
+      const arrayBuffer = await file.arrayBuffer();
+      const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+      const inputTensor = await extractMFCCs(audioBuffer);
 
+      const prediction = model.predict(inputTensor);
+      const predictedIndex = prediction.argMax(-1).dataSync()[0];
+      const chordName = chordMap[predictedIndex] || "Desconhecido";
 
+      document.getElementById("result").innerText = `🎸 Acorde: ${chordName}`;
+    }
 
-   async function predictChord(file) {
-  document.getElementById("result").innerText = "🎵 Analisando áudio...";
-  const audioCtx = new AudioContext();
-  const arrayBuffer = await file.arrayBuffer();
-  const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-  const inputTensor = await extractMFCCs(audioBuffer);
-
-  console.log("Input shape:", inputTensor.shape);
-
-  const prediction = model.predict(inputTensor);
-  const predictedIndex = prediction.argMax(-1).dataSync()[0];
-  const chordName = chordMap[predictedIndex] || "Desconhecido";
-
-  document.getElementById("result").innerText = `🎸 Acorde: ${chordName}`;
-}
-
+    // =====================================================
+    // 4️⃣ Evento de upload
+    // =====================================================
     document.getElementById("audioFile").addEventListener("change", (e) => {
       const file = e.target.files[0];
       if (file && model) predictChord(file);
